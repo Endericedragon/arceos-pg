@@ -5,9 +5,7 @@ use kspin::{SpinNoIrq, SpinNoIrqGuard};
 use linked_list::{def_node, List};
 
 use crate::{current_run_queue, select_run_queue, AxTaskRef};
-
-#[cfg(feature = "irq")]
-use crate::CurrentTask;
+use crate::task::TaskState;
 
 def_node!(WaitTaskNode, AxTaskRef);
 
@@ -55,6 +53,18 @@ impl WaitQueue {
         }
     }
 
+    fn waiter_blocked(&self, waiter: &Node) {
+        let curr = waiter.inner();
+        assert!(curr.is_running());
+        assert!(!curr.is_idle());
+        let mut wq_locked = self.list.lock();
+        debug!("task block: {}", curr.id_name());
+        // Mark the task as blocked, this has to be done before adding it to the wait queue
+        // while holding the lock of the wait queue.
+        curr.set_state(TaskState::Blocked);
+        wq_locked.push_back(waiter.clone());
+    }
+
     /// Cancel events by removing the task from the wait list.
     /// If `from_timer_list` is true, try to remove the task from the timer list.
     fn cancel_events(&self, waiter: &Node, _from_timer_list: bool) {
@@ -82,7 +92,8 @@ impl WaitQueue {
     /// notifies it.
     pub fn wait(&self) {
         declare_current_waiter!(waiter);
-        current_run_queue::<NoPreemptIrqSave>().blocked_resched(self.list.lock(), waiter.clone());
+        self.waiter_blocked(&waiter);
+        current_run_queue::<NoPreemptIrqSave>().reschedule();
         self.cancel_events(&waiter, false);
     }
 
@@ -97,13 +108,12 @@ impl WaitQueue {
     {
         declare_current_waiter!(waiter);
         loop {
-            let mut rq = current_run_queue::<NoPreemptIrqSave>();
-            let wq = self.list.lock();
             if condition() {
                 break;
             }
-            rq.blocked_resched(wq, waiter.clone());
+            self.waiter_blocked(&waiter);
             // Preemption may occur here.
+            current_run_queue::<NoPreemptIrqSave>().reschedule();
         }
 
         self.cancel_events(&waiter, false);
@@ -114,20 +124,16 @@ impl WaitQueue {
     #[cfg(feature = "irq")]
     pub fn wait_timeout(&self, dur: core::time::Duration) -> bool {
         declare_current_waiter!(waiter);
-        let mut rq = current_run_queue::<NoPreemptIrqSave>();
-        let curr = crate::current();
         let deadline = axhal::time::wall_time() + dur;
         debug!(
             "task wait_timeout: {} deadline={:?}",
-            curr.id_name(),
+            waiter.inner().id_name(),
             deadline
         );
-        crate::timers::set_alarm_wakeup(deadline, curr.clone());
-
-        rq.blocked_resched(self.list.lock(), waiter.clone());
-
+        self.waiter_blocked(&waiter);
+        crate::timers::set_alarm_wakeup(deadline, waiter.inner().clone());
+        current_run_queue::<NoPreemptIrqSave>().reschedule();
         let timeout = axhal::time::wall_time() >= deadline;
-
         // Always try to remove the task from the timer list.
         self.cancel_events(&waiter, true);
         timeout
@@ -144,28 +150,27 @@ impl WaitQueue {
         F: Fn() -> bool,
     {
         declare_current_waiter!(waiter);
-        let curr = crate::current();
         let deadline = axhal::time::wall_time() + dur;
         debug!(
             "task wait_timeout: {}, deadline={:?}",
-            curr.id_name(),
+            waiter.inner().id_name(),
             deadline
         );
-        crate::timers::set_alarm_wakeup(deadline, curr.clone());
+        crate::timers::set_alarm_wakeup(deadline, waiter.inner().clone());
 
         let mut timeout = true;
         loop {
-            let mut rq = current_run_queue::<NoPreemptIrqSave>();
             if axhal::time::wall_time() >= deadline {
                 break;
             }
-            let mut wq = self.list.lock();
             if condition() {
                 timeout = false;
                 break;
             }
-            rq.blocked_resched(wq, waiter.clone());
+
+            self.waiter_blocked(&waiter);
             // Preemption may occur here.
+            current_run_queue::<NoPreemptIrqSave>().reschedule();
         }
 
         // Always try to remove the task from the timer list.
@@ -217,7 +222,7 @@ impl WaitQueue {
             }
             cursor.move_next();
         }
-    }
+    } 
 }
 
 fn unblock_one_task(task: AxTaskRef, resched: bool) {
