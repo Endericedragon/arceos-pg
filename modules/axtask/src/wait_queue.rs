@@ -82,7 +82,7 @@ impl WaitQueue {
     /// notifies it.
     pub fn wait(&self) {
         declare_current_waiter!(waiter);
-        current_run_queue::<NoPreemptIrqSave>().blocked_resched(self.list.lock(),waiter.clone());
+        current_run_queue::<NoPreemptIrqSave>().blocked_resched(self.list.lock(), waiter.clone());
         self.cancel_events(&waiter, false);
     }
 
