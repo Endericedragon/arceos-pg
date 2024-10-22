@@ -25,6 +25,14 @@ unsafe fn init_mmu() {
     riscv::asm::sfence_vma_all();
 }
 
+// Let's say something before ArceOS logo appears!
+use crate::console::putchar;
+unsafe fn print_welcome_message() {
+    for cc in "Early greeting: Welcome to ArceOS".chars() {
+        putchar(cc as u8);
+    }
+}
+
 /// The earliest entry point for the primary CPU.
 #[naked]
 #[no_mangle]
@@ -41,6 +49,7 @@ unsafe extern "C" fn _start() -> ! {
         add     sp, sp, t0              // setup boot stack
 
         call    {init_boot_page_table}
+        call    {console_putstr}        // Let's say something before ArceOS logo appears!
         call    {init_mmu}              // setup boot page table and enabel MMU
 
         li      s2, {phys_virt_offset}  // fix up virtual high address
@@ -57,7 +66,10 @@ unsafe extern "C" fn _start() -> ! {
         boot_stack = sym BOOT_STACK,
         init_boot_page_table = sym init_boot_page_table,
         init_mmu = sym init_mmu,
+        // `rust_entry` in modules/axhal/src/platform/riscv64_qemu_virt/mod.rs
         entry = sym super::rust_entry,
+        // Let's say something before ArceOS logo appears!
+        console_putstr = sym print_welcome_message,
         options(noreturn),
     )
 }

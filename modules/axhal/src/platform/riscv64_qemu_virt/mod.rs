@@ -23,6 +23,7 @@ unsafe extern "C" fn rust_entry(cpu_id: usize, dtb: usize) {
     crate::cpu::init_primary(cpu_id);
     crate::arch::set_trap_vector_base(trap_vector_base as usize);
     self::time::init_early();
+    // `rust_main` in modules/axruntime/src/lib.rs
     rust_main(cpu_id, dtb);
 }
 
